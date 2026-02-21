@@ -15,41 +15,55 @@ def get_video_link():
             "error": "No URL provided. Add ?url=YOUR_YOUTUBE_LINK to the end."
         }), 400
 
-    # THE FIX: Vercel is read-only. We must copy the cookies file to the writable /tmp/ folder
     source_cookie = os.path.join(os.getcwd(), 'cookies.txt')
     tmp_cookie = '/tmp/cookies.txt'
     
-    # Copy the file to /tmp/ if it exists
     if os.path.exists(source_cookie):
         try:
             shutil.copyfile(source_cookie, tmp_cookie)
         except Exception:
             pass
 
-    # Configure yt-dlp
+    # THE FIX: A flexible format selector. 
+    # Try combined (best). If missing, try separate (bestvideo+bestaudio).
     ydl_opts = {
-        'format': 'best',
+        'format': 'best/bestvideo+bestaudio/bestvideo/bestaudio',
         'skip_download': True,
         'quiet': True,
         'no_warnings': True,
     }
 
-    # Tell yt-dlp to use the writable cookies file in /tmp/
     if os.path.exists(tmp_cookie):
         ydl_opts['cookiefile'] = tmp_cookie
 
     try:
-        # Run yt-dlp
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             
-            direct_url = info.get('url')
             title = info.get('title', 'Unknown Title')
             
+            # If a single combined file exists, it will be here
+            direct_url = info.get('url')
+            audio_url = None
+            
+            # If YouTube only has separate video and audio streams, extract them safely without crashing
+            if not direct_url and 'requested_formats' in info:
+                for f in info['requested_formats']:
+                    if f.get('vcodec') != 'none':
+                        direct_url = f.get('url') # Video stream
+                    if f.get('acodec') != 'none':
+                        audio_url = f.get('url')  # Audio stream
+
+            # Ultimate fallback if formatted differently
+            if not direct_url and 'formats' in info and len(info['formats']) > 0:
+                direct_url = info['formats'][-1].get('url')
+
             return jsonify({
                 "success": True,
                 "title": title,
-                "redirect_link": direct_url
+                "redirect_link": direct_url,
+                "audio_only_link": audio_url,
+                "note": "Combined stream found." if not audio_url else "YouTube separated the streams. redirect_link has no sound; use audio_only_link for sound."
             })
             
     except Exception as e:
