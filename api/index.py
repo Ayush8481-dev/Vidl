@@ -10,10 +10,7 @@ def get_video_link():
     url = request.args.get('url')
     
     if not url:
-        return jsonify({
-            "success": False, 
-            "error": "No URL provided. Add ?url=YOUR_YOUTUBE_LINK to the end."
-        }), 400
+        return jsonify({"success": False, "error": "No URL provided."}), 400
 
     source_cookie = os.path.join(os.getcwd(), 'cookies.txt')
     tmp_cookie = '/tmp/cookies.txt'
@@ -24,13 +21,15 @@ def get_video_link():
         except Exception:
             pass
 
-    # THE FIX: A flexible format selector. 
-    # Try combined (best). If missing, try separate (bestvideo+bestaudio).
+    # THE FIX: 
+    # 1. cachedir: False prevents Vercel read-only crashes when caching YouTube signatures.
+    # 2. format: 'bestvideo' prevents yt-dlp from crashing on Vercel due to missing ffmpeg.
     ydl_opts = {
-        'format': 'best/bestvideo+bestaudio/bestvideo/bestaudio',
+        'format': 'bestvideo/bestaudio/best',
         'skip_download': True,
         'quiet': True,
         'no_warnings': True,
+        'cachedir': False, 
     }
 
     if os.path.exists(tmp_cookie):
@@ -41,29 +40,37 @@ def get_video_link():
             info = ydl.extract_info(url, download=False)
             
             title = info.get('title', 'Unknown Title')
+            formats = info.get('formats', [])
             
-            # If a single combined file exists, it will be here
-            direct_url = info.get('url')
-            audio_url = None
+            # Manually sort through the data to find the exact links
+            best_combined = None
+            best_video_only = None
+            best_audio_only = None
             
-            # If YouTube only has separate video and audio streams, extract them safely without crashing
-            if not direct_url and 'requested_formats' in info:
-                for f in info['requested_formats']:
-                    if f.get('vcodec') != 'none':
-                        direct_url = f.get('url') # Video stream
-                    if f.get('acodec') != 'none':
-                        audio_url = f.get('url')  # Audio stream
-
-            # Ultimate fallback if formatted differently
-            if not direct_url and 'formats' in info and len(info['formats']) > 0:
-                direct_url = info['formats'][-1].get('url')
+            for f in formats:
+                vcodec = f.get('vcodec')
+                acodec = f.get('acodec')
+                
+                has_video = vcodec != 'none' and vcodec is not None
+                has_audio = acodec != 'none' and acodec is not None
+                url_link = f.get('url')
+                
+                if not url_link:
+                    continue
+                    
+                if has_video and has_audio:
+                    best_combined = url_link
+                elif has_video and not has_audio:
+                    best_video_only = url_link
+                elif not has_video and has_audio:
+                    best_audio_only = url_link
 
             return jsonify({
                 "success": True,
                 "title": title,
-                "redirect_link": direct_url,
-                "audio_only_link": audio_url,
-                "note": "Combined stream found." if not audio_url else "YouTube separated the streams. redirect_link has no sound; use audio_only_link for sound."
+                "combined_link": best_combined, 
+                "video_only_link": best_video_only, 
+                "audio_only_link": best_audio_only 
             })
             
     except Exception as e:
