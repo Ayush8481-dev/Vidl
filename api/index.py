@@ -1,5 +1,7 @@
 from flask import Flask, request, jsonify
 import yt_dlp
+import os
+import tempfile
 
 app = Flask(__name__)
 
@@ -10,25 +12,37 @@ def extract_video():
     if not video_url:
         return jsonify({"error": "Missing URL parameter"}), 400
 
+    # --- 1. SETUP COOKIES FROM VERCEL SETTINGS ---
+    cookie_path = None
+    # Read the secret variable from Vercel
+    cookie_content = os.environ.get('YT_COOKIES')
+    
+    if cookie_content:
+        # Create a temporary file because yt-dlp needs a file, not text
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as f:
+                f.write(cookie_content)
+                cookie_path = f.name
+        except Exception as e:
+            return jsonify({"error": "Failed to create cookie file"}), 500
+
     try:
         ydl_opts = {
             'format': 'best',
             'quiet': True,
             'no_warnings': True,
             'nocheckcertificate': True,
+            # PASS THE COOKIE FILE HERE
+            'cookiefile': cookie_path, 
             
-            # ATTEMPT 3: THE ANDROID TV STRATEGY
-            # TV clients often bypass "Sign In" checks because TVs don't have keyboards
+            # Use standard Web Client (Best when using Cookies)
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android_tv'],
-                    'innertube_client': ['android_tv'],
-                    'player_skip': ['webpage', 'configs', 'js'],
+                    'player_client': ['web'],
+                    'player_skip': ['configs', 'js'],
                 }
             },
-            
-            # Use a generic TV User Agent
-            'user_agent': 'Mozilla/5.0 (Linux; Android 9; AFTMM Build/PS7293; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/70.0.3538.110 Mobile Safari/537.36',
+            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -39,7 +53,7 @@ def extract_video():
             thumbnail = info.get('thumbnail', None)
             
             if not direct_url:
-                return jsonify({"error": "No URL found. Vercel IP is likely hard-banned."}), 403
+                return jsonify({"error": "Failed to extract URL even with cookies"}), 403
 
             return jsonify({
                 "status": "success",
@@ -49,7 +63,12 @@ def extract_video():
             })
 
     except Exception as e:
-        return jsonify({"error": str(e), "message": "If you see 'Sign in' or 'Reload', Vercel is banned."}), 500
+        return jsonify({"error": str(e)}), 500
+        
+    finally:
+        # Cleanup: Delete the temp file to save memory
+        if cookie_path and os.path.exists(cookie_path):
+            os.remove(cookie_path)
 
 if __name__ == '__main__':
     app.run()
