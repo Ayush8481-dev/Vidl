@@ -12,37 +12,44 @@ def extract_video():
     if not video_url:
         return jsonify({"error": "Missing URL parameter"}), 400
 
-    # --- 1. SETUP COOKIES FROM VERCEL SETTINGS ---
+    # --- 1. SETUP COOKIES (Required for Vercel) ---
     cookie_path = None
-    # Read the secret variable from Vercel
     cookie_content = os.environ.get('YT_COOKIES')
     
     if cookie_content:
-        # Create a temporary file because yt-dlp needs a file, not text
         try:
             with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as f:
                 f.write(cookie_content)
                 cookie_path = f.name
         except Exception as e:
-            return jsonify({"error": "Failed to create cookie file"}), 500
+            return jsonify({"error": "Cookie file creation failed"}), 500
 
     try:
         ydl_opts = {
-            'format': 'best',
+            # FIX FOR "FORMAT NOT AVAILABLE":
+            # We explicitly ask for the best single file that contains BOTH audio and video (ext=mp4)
+            # We fallback to 'best' if that fails.
+            'format': 'best[ext=mp4]/best',
+            
             'quiet': True,
             'no_warnings': True,
             'nocheckcertificate': True,
-            # PASS THE COOKIE FILE HERE
-            'cookiefile': cookie_path, 
+            'noplaylist': True,
             
-            # Use standard Web Client (Best when using Cookies)
+            # PASS COOKIES
+            'cookiefile': cookie_path,
+            
+            # USE ANDROID CLIENT (Better for single-file formats than Web)
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['web'],
-                    'player_skip': ['configs', 'js'],
+                    'player_client': ['android', 'web'],
+                    'player_skip': ['webpage', 'configs', 'js'],
+                    'innertube_client': ['android'],
                 }
             },
-            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            
+            # Spoof Android Phone
+            'user_agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36',
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -53,7 +60,7 @@ def extract_video():
             thumbnail = info.get('thumbnail', None)
             
             if not direct_url:
-                return jsonify({"error": "Failed to extract URL even with cookies"}), 403
+                return jsonify({"error": "No direct link found. Formats might be restricted."}), 403
 
             return jsonify({
                 "status": "success",
@@ -63,10 +70,11 @@ def extract_video():
             })
 
     except Exception as e:
+        # Detailed error reporting
         return jsonify({"error": str(e)}), 500
         
     finally:
-        # Cleanup: Delete the temp file to save memory
+        # Cleanup cookies
         if cookie_path and os.path.exists(cookie_path):
             os.remove(cookie_path)
 
