@@ -1,7 +1,5 @@
 from flask import Flask, request, jsonify
 import yt_dlp
-import os
-import tempfile
 
 app = Flask(__name__)
 
@@ -12,38 +10,29 @@ def extract_video():
     if not video_url:
         return jsonify({"error": "Missing URL parameter"}), 400
 
-    # --- HANDLE COOKIES ---
-    # We create a temporary file because yt-dlp needs a file path, not a string
-    cookie_path = None
-    cookie_content = os.environ.get('YT_COOKIES')
-    
-    if cookie_content:
-        try:
-            # Create a temp file named cookies.txt
-            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as f:
-                f.write(cookie_content)
-                cookie_path = f.name
-        except Exception as e:
-            return jsonify({"error": f"Cookie error: {str(e)}"}), 500
-
     try:
         ydl_opts = {
             'format': 'best',
             'quiet': True,
             'no_warnings': True,
             'nocheckcertificate': True,
-            # Use the cookie file if it exists
-            'cookiefile': cookie_path,
             
-            # Keep the Android spoofing as a backup layer
+            # CRITICAL FIXES FOR "PAGE RELOAD" ERROR:
+            'noplaylist': True,
+            'extract_flat': False,
+            'cachedir': False,  # Disable cache to prevent looping old bad tokens
+            
+            # SWITCH TO iOS CLIENT (Often less restricted on Data Centers)
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android', 'web'],
+                    'player_client': ['ios', 'web'],
                     'player_skip': ['webpage', 'configs', 'js'],
-                    'innertube_client': ['android'],
+                    'innertube_client': ['ios'],
                 }
             },
-            'user_agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36',
+            
+            # iOS User Agent
+            'user_agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -53,7 +42,9 @@ def extract_video():
             title = info.get('title', 'Unknown')
             thumbnail = info.get('thumbnail', None)
             
-            # Clean up the response
+            if not direct_url:
+                return jsonify({"error": "No direct link found. YouTube might be blocking the IP."}), 403
+
             return jsonify({
                 "status": "success",
                 "title": title,
@@ -62,12 +53,15 @@ def extract_video():
             })
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        error_message = str(e)
+        # Check for the specific "Sign in" error to give a clear message
+        if "Sign in to confirm" in error_message:
+             return jsonify({
+                 "error": "Vercel IP Banned. YouTube requires Cookies/Login.",
+                 "details": error_message
+             }), 403
         
-    finally:
-        # Cleanup: Delete the temp cookie file so it doesn't fill up memory
-        if cookie_path and os.path.exists(cookie_path):
-            os.remove(cookie_path)
+        return jsonify({"error": error_message}), 500
 
 if __name__ == '__main__':
     app.run()
