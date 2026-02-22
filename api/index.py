@@ -1,5 +1,7 @@
 from flask import Flask, request, jsonify
 import yt_dlp
+import os
+import tempfile
 
 app = Flask(__name__)
 
@@ -10,15 +12,30 @@ def extract_video():
     if not video_url:
         return jsonify({"error": "Missing URL parameter"}), 400
 
+    # --- HANDLE COOKIES ---
+    # We create a temporary file because yt-dlp needs a file path, not a string
+    cookie_path = None
+    cookie_content = os.environ.get('YT_COOKIES')
+    
+    if cookie_content:
+        try:
+            # Create a temp file named cookies.txt
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as f:
+                f.write(cookie_content)
+                cookie_path = f.name
+        except Exception as e:
+            return jsonify({"error": f"Cookie error: {str(e)}"}), 500
+
     try:
-        # CONFIGURE TO MIMIC ANDROID APP
         ydl_opts = {
-            'format': 'best',  # Get best combined audio/video
+            'format': 'best',
             'quiet': True,
             'no_warnings': True,
             'nocheckcertificate': True,
+            # Use the cookie file if it exists
+            'cookiefile': cookie_path,
             
-            # 1. Use Android Client API (Bypasses many web-based bot checks)
+            # Keep the Android spoofing as a backup layer
             'extractor_args': {
                 'youtube': {
                     'player_client': ['android', 'web'],
@@ -26,23 +43,17 @@ def extract_video():
                     'innertube_client': ['android'],
                 }
             },
-            
-            # 2. Spoof User Agent (Look like a generic Android Phone)
             'user_agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36',
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # extract_info is the main call to YouTube
             info = ydl.extract_info(video_url, download=False)
             
-            # Get the direct googlevideo link
             direct_url = info.get('url', None)
             title = info.get('title', 'Unknown')
             thumbnail = info.get('thumbnail', None)
             
-            if not direct_url:
-                return jsonify({"error": "No direct link found"}), 404
-
+            # Clean up the response
             return jsonify({
                 "status": "success",
                 "title": title,
@@ -51,9 +62,12 @@ def extract_video():
             })
 
     except Exception as e:
-        # Return the specific error so you know if it's a 403 or something else
         return jsonify({"error": str(e)}), 500
+        
+    finally:
+        # Cleanup: Delete the temp cookie file so it doesn't fill up memory
+        if cookie_path and os.path.exists(cookie_path):
+            os.remove(cookie_path)
 
-# Required for Vercel
 if __name__ == '__main__':
     app.run()
